@@ -341,3 +341,83 @@ echo -e "\nApplication Health:"
 # Add your application-specific health checks here
 
 echo "=== Validation Complete ==="
+
+## Rollback Procedures
+
+### Emergency Rollback Steps
+
+1. **Immediate Rollback**
+```bash
+# Revert Auto Scaling Group to previous launch template
+aws autoscaling update-auto-scaling-group \
+    --auto-scaling-group-name "production-asg" \
+    --launch-template LaunchTemplateName="original-al2-template",Version='$Latest'
+```
+
+2. **Cancel Instance Refresh**
+```bash
+# Cancel ongoing instance refresh
+aws autoscaling cancel-instance-refresh \
+    --auto-scaling-group-name "production-asg"
+```
+
+3. **Manual Instance Replacement**
+```bash
+# Terminate problematic instances (will be replaced by ASG)
+aws ec2 terminate-instances --instance-ids i-problematic-instance
+```
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### Issue 1: User Data Script Failures
+**Symptoms**: Instance launches but applications don't start
+**Solution**: 
+- Check `/var/log/cloud-init-output.log`
+- Verify script syntax and permissions
+- Test user data script on test instance
+
+#### Issue 2: Package Installation Failures
+**Symptoms**: dnf commands fail in user data
+**Solution**:
+```bash
+# Add retry logic to user data
+for i in {1..3}; do
+    dnf update -y && break
+    sleep 30
+done
+```
+
+#### Issue 3: IMDS Access Issues
+**Symptoms**: Applications can't access instance metadata
+**Solution**:
+- Verify hop limit configuration
+- Check security group rules
+- Update application to use IMDSv2
+
+#### Issue 4: Service Startup Failures
+**Symptoms**: systemd services don't start automatically
+**Solution**:
+```bash
+# Add explicit service management in user data
+systemctl enable your-service
+systemctl start your-service
+systemctl status your-service
+```
+
+### Debug Commands
+```bash
+# Check cloud-init logs
+sudo tail -f /var/log/cloud-init-output.log
+
+# Verify instance metadata access
+curl -H "X-aws-ec2-metadata-token: $(curl -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')" http://169.254.169.254/latest/meta-data/
+
+# Check system journal for errors
+journalctl -xe
+
+# Validate network connectivity
+ping 8.8.8.8
+nslookup amazon.com
+```
