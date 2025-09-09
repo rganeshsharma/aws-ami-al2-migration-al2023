@@ -298,3 +298,46 @@ aws autoscaling start-instance-refresh \
         "CheckpointDelay": 600
     }'
 ```
+
+## Post-Migration Validation
+
+### System Validation Checklist
+- [ ] Verify OS version and kernel
+- [ ] Confirm all services are running
+- [ ] Test application functionality
+- [ ] Validate log aggregation
+- [ ] Check monitoring and alerting
+- [ ] Verify backup processes
+- [ ] Test security controls
+
+### Automated Validation Script
+```bash
+#!/bin/bash
+# post-migration-validation.sh
+
+echo "=== AL2023 Migration Validation ==="
+
+# Check OS version
+echo "OS Version:"
+cat /etc/os-release | grep PRETTY_NAME
+
+# Check running services
+echo -e "\nCritical Services Status:"
+for service in sshd amazon-ssm-agent; do
+    systemctl is-active $service
+done
+
+# Check IMDS v2 enforcement
+echo -e "\nIMDS Configuration:"
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+if [ -n "$TOKEN" ]; then
+    echo "IMDSv2: ENABLED"
+else
+    echo "IMDSv2: DISABLED/ERROR"
+fi
+
+# Application health check (customize as needed)
+echo -e "\nApplication Health:"
+# Add your application-specific health checks here
+
+echo "=== Validation Complete ==="
