@@ -122,3 +122,222 @@ Content-Type: text/x-shellscript;
 ```
 
 Use this new template that has hop limit set to 2 and add choose this launch template during new AL2023 node group creation.
+
+
+## Launch Template Configuration
+
+### Core Configuration Parameters
+
+```bash
+# Get latest AL2023 AMI ID
+AL2023_AMI_ID=$(aws ec2 describe-images \
+    --owners amazon \
+    --filters "Name=name,Values=al2023-ami-*-x86_64" \
+              "Name=state,Values=available" \
+    --query 'Images | sort_by(@, &CreationDate) | [-1].ImageId' \
+    --output text)
+```
+
+### Instance Metadata Service (IMDS) Configuration
+- **Hop Limit**: Set to 2 for enhanced security
+- **IMDS Version**: Enforce IMDSv2
+- **Response Hop Limit**: Controls metadata access through NAT/proxy
+
+## Step-by-Step Migration Process
+
+### Phase 1: Preparation
+
+#### 1.1 Inventory Current Configuration
+```bash
+# Document existing instance details
+aws ec2 describe-instances \
+    --instance-ids i-1234567890abcdef0 \
+    --query 'Reservations[].Instances[].[InstanceId,InstanceType,ImageId,SecurityGroups,IamInstanceProfile]' \
+    --output table
+```
+
+#### 1.2 Create Launch Template
+
+```bash
+# Create launch template with AL2023 and security configurations
+aws ec2 create-launch-template \
+    --launch-template-name "al2023-migration-template" \
+    --launch-template-data '{
+        "ImageId": "'$AL2023_AMI_ID'",
+        "InstanceType": "t3.medium",
+        "SecurityGroupIds": ["sg-xxxxxxxxxx"],
+        "IamInstanceProfile": {
+            "Name": "EC2-Instance-Profile"
+        },
+        "MetadataOptions": {
+            "HttpTokens": "required",
+            "HttpPutResponseHopLimit": 2,
+            "HttpEndpoint": "enabled",
+            "InstanceMetadataTags": "enabled"
+        },
+        "UserData": "'$(base64 -w 0 userdata.sh)'",
+        "TagSpecifications": [
+            {
+                "ResourceType": "instance",
+                "Tags": [
+                    {
+                        "Key": "Name",
+                        "Value": "AL2023-Migrated-Instance"
+                    },
+                    {
+                        "Key": "Environment",
+                        "Value": "Production"
+                    },
+                    {
+                        "Key": "Migration",
+                        "Value": "AL2-to-AL2023"
+                    }
+                ]
+            }
+        ]
+    }'
+```
+
+#### 1.3 Sample User Data Script (userdata.sh)
+
+```bash
+#!/bin/bash
+
+# AL2023 User Data Script for Migration
+# Set system timezone
+timedatectl set-timezone UTC
+
+# Update system packages
+dnf update -y
+
+# Install essential packages
+dnf install -y \
+    htop \
+    curl \
+    wget \
+    git \
+    unzip \
+    python3-pip \
+    awscli
+
+# Configure CloudWatch agent (if required)
+if [ -f "/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json" ]; then
+    /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl \
+        -a fetch-config \
+        -m ec2 \
+        -c file:/opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json \
+        -s
+fi
+
+# Application-specific configurations
+# Replace with your application setup commands
+
+# Enable and start services
+systemctl enable amazon-ssm-agent
+systemctl start amazon-ssm-agent
+
+# Custom application deployment
+# Add your application-specific commands here
+
+# Signal completion
+/opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource AutoScalingGroup --region ${AWS::Region}
+
+# Log completion
+echo "AL2023 instance initialization completed at $(date)" >> /var/log/migration.log
+```
+### Phase 2: Testing and Validation
+
+#### 2.1 Launch Test Instance
+```bash
+# Launch instance from template for testing
+aws ec2 run-instances \
+    --launch-template LaunchTemplateName="al2023-migration-template",Version='$Latest' \
+    --min-count 1 \
+    --max-count 1 \
+    --subnet-id subnet-xxxxxxxxxx
+```
+
+#### 2.2 Validate Instance Configuration
+```bash
+# Connect to instance and verify configurations
+ssh -i your-key.pem ec2-user@instance-ip
+
+# Check OS version
+cat /etc/os-release
+
+# Verify IMDS configuration
+curl -s http://169.254.169.254/latest/meta-data/instance-id
+
+# Check hop limit setting
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/)/network-card/
+
+# Verify user data execution
+cat /var/log/cloud-init-output.log
+```
+
+### Phase 3: Production Migration
+
+#### 3.1 Update Auto Scaling Group (if applicable)
+```bash
+# Update Auto Scaling Group to use new launch template
+aws autoscaling update-auto-scaling-group \
+    --auto-scaling-group-name "production-asg" \
+    --launch-template LaunchTemplateName="al2023-migration-template",Version='$Latest'
+```
+
+#### 3.2 Rolling Instance Replacement
+```bash
+# Start instance refresh for gradual migration
+aws autoscaling start-instance-refresh \
+    --auto-scaling-group-name "production-asg" \
+    --preferences '{
+        "InstanceWarmup": 300,
+        "MinHealthyPercentage": 90,
+        "CheckpointPercentages": [20, 50, 100],
+        "CheckpointDelay": 600
+    }'
+```
+
+## Post-Migration Validation
+
+### System Validation Checklist
+- [ ] Verify OS version and kernel
+- [ ] Confirm all services are running
+- [ ] Test application functionality
+- [ ] Validate log aggregation
+- [ ] Check monitoring and alerting
+- [ ] Verify backup processes
+- [ ] Test security controls
+
+### Automated Validation Script
+```bash
+#!/bin/bash
+# post-migration-validation.sh
+
+echo "=== AL2023 Migration Validation ==="
+
+# Check OS version
+echo "OS Version:"
+cat /etc/os-release | grep PRETTY_NAME
+
+# Check running services
+echo -e "\nCritical Services Status:"
+for service in sshd amazon-ssm-agent; do
+    systemctl is-active $service
+done
+
+# Check IMDS v2 enforcement
+echo -e "\nIMDS Configuration:"
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null)
+if [ -n "$TOKEN" ]; then
+    echo "IMDSv2: ENABLED"
+else
+    echo "IMDSv2: DISABLED/ERROR"
+fi
+
+# Application health check (customize as needed)
+echo -e "\nApplication Health:"
+# Add your application-specific health checks here
+
+echo "=== Validation Complete ==="
