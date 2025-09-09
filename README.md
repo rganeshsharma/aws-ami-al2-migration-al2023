@@ -275,3 +275,26 @@ curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta
 # Verify user data execution
 cat /var/log/cloud-init-output.log
 ```
+
+### Phase 3: Production Migration
+
+#### 3.1 Update Auto Scaling Group (if applicable)
+```bash
+# Update Auto Scaling Group to use new launch template
+aws autoscaling update-auto-scaling-group \
+    --auto-scaling-group-name "production-asg" \
+    --launch-template LaunchTemplateName="al2023-migration-template",Version='$Latest'
+```
+
+#### 3.2 Rolling Instance Replacement
+```bash
+# Start instance refresh for gradual migration
+aws autoscaling start-instance-refresh \
+    --auto-scaling-group-name "production-asg" \
+    --preferences '{
+        "InstanceWarmup": 300,
+        "MinHealthyPercentage": 90,
+        "CheckpointPercentages": [20, 50, 100],
+        "CheckpointDelay": 600
+    }'
+```
