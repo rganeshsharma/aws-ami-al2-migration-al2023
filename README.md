@@ -245,3 +245,33 @@ systemctl start amazon-ssm-agent
 # Log completion
 echo "AL2023 instance initialization completed at $(date)" >> /var/log/migration.log
 ```
+### Phase 2: Testing and Validation
+
+#### 2.1 Launch Test Instance
+```bash
+# Launch instance from template for testing
+aws ec2 run-instances \
+    --launch-template LaunchTemplateName="al2023-migration-template",Version='$Latest' \
+    --min-count 1 \
+    --max-count 1 \
+    --subnet-id subnet-xxxxxxxxxx
+```
+
+#### 2.2 Validate Instance Configuration
+```bash
+# Connect to instance and verify configurations
+ssh -i your-key.pem ec2-user@instance-ip
+
+# Check OS version
+cat /etc/os-release
+
+# Verify IMDS configuration
+curl -s http://169.254.169.254/latest/meta-data/instance-id
+
+# Check hop limit setting
+TOKEN=$(curl -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/$(curl -H "X-aws-ec2-metadata-token: $TOKEN" -s http://169.254.169.254/latest/meta-data/network/interfaces/macs/)/network-card/
+
+# Verify user data execution
+cat /var/log/cloud-init-output.log
+```
