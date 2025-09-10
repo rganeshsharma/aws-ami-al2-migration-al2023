@@ -15,7 +15,6 @@ This document outlines the standard operating procedure for migrating AWS EC2 in
 - [Troubleshooting](#troubleshooting)
 - [Best Practices](#best-practices)
 
-
 ## Prerequisites
 
 ### Technical Requirements
@@ -74,55 +73,6 @@ This document outlines the standard operating procedure for migrating AWS EC2 in
 1. **Blue-Green Deployment** (Recommended)
 2. **Rolling Update**
 3. **In-Place Migration** (Not recommended for production)
-
-## Launch Template Configuration
-### Using AWS Console 
-AWS Console > EC2> Launch templates > Create Launch template 
-
-Launch templates name : al2023_launch_template
-Click Browser AMI's > al2023 for x86_64 AL 2023 kernel-6.x AMI
-If you want you can add custom Instance type, Keypair, Network settings, Storage for the launch template
-
-Advanced details > Metadata response hop limit = 2
-
-Provide User data consisting your cluster details 
-
-Refer for example user data: https://repost.aws/knowledge-center/custom-user-eks-2023 
-
-```config
-MIME-Version: 1.0
-Content-Type: multipart/mixed; boundary="BOUNDARY"
-
---BOUNDARY
-Content-Type: application/node.eks.aws
-
----
-apiVersion: node.eks.aws/v1alpha1
-kind: NodeConfig
-spec:
-  cluster:
-    apiServerEndpoint: API_SERVER_ENDPOINT
-    certificateAuthority: CERTIFICATE
-    cidr: SERVICE_IPv4_RANGE
-    name: CLUSTER_NAME
-  kubelet:
-    config:
-      maxPods: 17 
-    flags:
-    - "--node-labels=key=value" 
-
---BOUNDARY
-Content-Type: text/x-shellscript;
-
-#!/bin/bash
-  set -o xtrace
-  yum install htop -y
-
---BOUNDARY--
-```
-
-Use this new template that has hop limit set to 2 and add choose this launch template during new AL2023 node group creation.
-
 
 ## Launch Template Configuration
 
@@ -245,6 +195,7 @@ systemctl start amazon-ssm-agent
 # Log completion
 echo "AL2023 instance initialization completed at $(date)" >> /var/log/migration.log
 ```
+
 ### Phase 2: Testing and Validation
 
 #### 2.1 Launch Test Instance
@@ -341,6 +292,87 @@ echo -e "\nApplication Health:"
 # Add your application-specific health checks here
 
 echo "=== Validation Complete ==="
+```
+
+## Rollback Procedures
+
+### Emergency Rollback Steps
+
+1. **Immediate Rollback**
+```bash
+# Revert Auto Scaling Group to previous launch template
+aws autoscaling update-auto-scaling-group \
+    --auto-scaling-group-name "production-asg" \
+    --launch-template LaunchTemplateName="original-al2-template",Version='$Latest'
+```
+
+2. **Cancel Instance Refresh**
+```bash
+# Cancel ongoing instance refresh
+aws autoscaling cancel-instance-refresh \
+    --auto-scaling-group-name "production-asg"
+```
+
+3. **Manual Instance Replacement**
+```bash
+# Terminate problematic instances (will be replaced by ASG)
+aws ec2 terminate-instances --instance-ids i-problematic-instance
+```
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### Issue 1: User Data Script Failures
+**Symptoms**: Instance launches but applications don't start
+**Solution**: 
+- Check `/var/log/cloud-init-output.log`
+- Verify script syntax and permissions
+- Test user data script on test instance
+
+#### Issue 2: Package Installation Failures
+**Symptoms**: dnf commands fail in user data
+**Solution**:
+```bash
+# Add retry logic to user data
+for i in {1..3}; do
+    dnf update -y && break
+    sleep 30
+done
+```
+
+#### Issue 3: IMDS Access Issues
+**Symptoms**: Applications can't access instance metadata
+**Solution**:
+- Verify hop limit configuration
+- Check security group rules
+- Update application to use IMDSv2
+
+#### Issue 4: Service Startup Failures
+**Symptoms**: systemd services don't start automatically
+**Solution**:
+```bash
+# Add explicit service management in user data
+systemctl enable your-service
+systemctl start your-service
+systemctl status your-service
+```
+
+### Debug Commands
+```bash
+# Check cloud-init logs
+sudo tail -f /var/log/cloud-init-output.log
+
+# Verify instance metadata access
+curl -H "X-aws-ec2-metadata-token: $(curl -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 21600')" http://169.254.169.254/latest/meta-data/
+
+# Check system journal for errors
+journalctl -xe
+
+# Validate network connectivity
+ping 8.8.8.8
+nslookup amazon.com
+```
 
 ## Best Practices
 
@@ -350,3 +382,39 @@ echo "=== Validation Complete ==="
 3. **Enable detailed monitoring** for better observability
 4. **Implement proper tagging strategy** for resource management
 5. **Use encrypted EBS volumes** for data at rest protection
+
+### Performance Optimization
+1. **Right-size instances** based on AL2023 performance characteristics
+2. **Optimize user data scripts** to reduce boot time
+3. **Use placement groups** for low-latency applications
+4. **Configure appropriate EBS volume types** for workload requirements
+
+### Operational Excellence
+1. **Implement comprehensive logging** and monitoring
+2. **Use Infrastructure as Code** (CloudFormation/Terraform) for reproducibility
+3. **Establish automated testing** pipelines
+4. **Document all customizations** and configurations
+5. **Regular security updates** and patch management
+
+### Cost Optimization
+1. **Review instance types** for better price/performance ratio
+2. **Implement auto-scaling policies** to match demand
+3. **Use Spot instances** where appropriate
+4. **Monitor and optimize EBS usage**
+
+## Additional Resources
+
+- [Amazon Linux 2023 User Guide](https://docs.aws.amazon.com/linux/al2023/ug/)
+- [EC2 Launch Templates Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-templates.html)
+- [Instance Metadata Service Documentation](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-metadata.html)
+- [AWS CLI Reference](https://docs.aws.amazon.com/cli/latest/reference/)
+
+## Change Log
+
+| Version | Date | Changes | Author |
+|---------|------|---------|---------|
+| 1.0 | 2025-09-08 | Initial SOP creation | DevOps Team |
+
+---
+
+**Note**: This SOP should be tested in a non-production environment before implementation. Always ensure proper backups and rollback procedures are in place before beginning migration activities.
