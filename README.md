@@ -341,3 +341,12 @@ echo -e "\nApplication Health:"
 # Add your application-specific health checks here
 
 echo "=== Validation Complete ==="
+
+## Best Practices
+
+### Security Considerations
+1. **Always enforce IMDSv2** with hop limit set to 2
+2. **Use least privilege IAM roles** for instances
+3. **Enable detailed monitoring** for better observability
+4. **Implement proper tagging strategy** for resource management
+5. **Use encrypted EBS volumes** for data at rest protection
